@@ -10,6 +10,7 @@
 #include <cctype>
 #include <random>
 #include <locale>
+#include <map>
 
 using namespace std;
 using json = nlohmann::json;
@@ -60,7 +61,7 @@ string replaceAllOccurrences(const string& text, const string& from, const strin
 
 void showHelp() {
     cout << "\n" << string(70, '=') << "\n";
-    cout << "                    TEXT SEARCH & REPLACE v2.1 - СПРАВКА\n";
+    cout << "                    TEXT SEARCH & REPLACE - СПРАВКА\n";
     cout << string(70, '=') << "\n\n";
 
     cout << "  ФОРМАТ JSON ФАЙЛОВ:\n";
@@ -70,27 +71,17 @@ void showHelp() {
     cout << "]\n\n";
 
     cout << "  МЕНЮ КОМАНД:\n";
-    cout << "  1) Генерация JSON    - создаёт data_0.json, data_1.json... (~0.7MB каждый)\n";
-    cout << "  2) Замена            - ищет/заменяет текст во всех объектах\n";
-    cout << "  3) Бенчмарк          - тест скорости (foo→BAR, 1-5MB)\n";
-    cout << "  4) Тесты             - 5 юнит-тестов (поиск/замена/JSON)\n";
-    cout << "  5) Выход             - завершить программу\n";
+    cout << "  1) Генерация JSON    - создаёт data_0, data_1... (~0.7MB каждый)\n";
+    cout << "  2) Поиск/замена      - ищет/заменяет текст во всех объектах\n";
+    cout << "  3) Выход             - завершить программу\n";
     cout << "  help / h             - показать эту справку\n\n";
 
-    cout << "  РЕЖИМ ЗАМЕНЫ (пункт 2) - последовательность вопросов:\n";
-    cout << "  • Файл: 'data_0.json' или 'all' (data_0..data_9)\n";
-    cout << "  • Ищем: строка для поиска ('foo')\n";
-    cout << "  • На: новая строка ('BAR')\n";
-    cout << "  • Регистр: y=Да (Foo≠foo), n=Нет (Foo=foo)\n";
-    cout << "  • Сухой прогон: y=показать без замены, n=ЗАМЕНИТЬ!\n";
-    cout << "  • Сохранить: y=спросить имя, n=не сохранять\n\n";
-
-    cout << "  ТЕСТЫ (пункт 4) - проверяют 5 сценариев:\n";
-    cout << "  1) 'foo bar foo' → позиции [0,8,16] (регистр=Да)\n";
-    cout << "  2) 'Foo foo FOO' → 3 вхождения (регистр=Нет)\n";
-    cout << "  3) 'foo bar foo' → 'BAR bar BAR' (замена)\n";
-    cout << "  4) JSON → 2 объекта TextObject (парсинг)\n";
-    cout << "  5) Пустая строка поиска → пустой результат\n\n";
+    cout << "  РЕЖИМ ПОИСК/ЗАМЕНА (пункт 2) - последовательность вопросов:\n";
+    cout << "  * Режим: 1=поиск, 2=замена\n";
+    cout << "  * Файл: 'data_0' или 'all' (data_0..data_999999)\n";
+    cout << "  * Ищем: строка для поиска ('foo')\n";
+    cout << "  * [только замена] На: ('BAR')\n";
+    cout << "  * [только замена] Регистр: y=Да (Foo!=foo), n=Нет (Foo=foo)\n\n";
 
     cout << string(70, '=') << "\n";
     cout << "Нажмите ENTER...";
@@ -114,82 +105,80 @@ void generateTestFiles(int fileCount, bool withErrors = false) {
     random_device rd;
     mt19937 gen(rd());
     uniform_int_distribution<> lenDist(300, 800);
+    uniform_int_distribution<> caseDist(0, 4); 
+
+    cout << "Генерация " << fileCount << " файлов";
+    if (withErrors) cout << " (с ошибками)";
+    cout << "... ";
+
+    auto start = chrono::high_resolution_clock::now();
 
     for (int f = 0; f < fileCount; f++) {
-        json data = json::array();
-        for (int i = 0; i < 15; i++) {
-            json record = { {"name", "file" + to_string(f) + "_obj" + to_string(i) + ".txt"} };
-            string content;
-            int len = lenDist(gen);
-            for (int j = 0; j < len / 10; j++) {
-                content += (j % 5 == 0) ? "foo " : (j % 3 == 0 ? "bar " : "test ");
+        if (withErrors && f % 5 == 0) {
+            ofstream file("data_" + to_string(f) + ".json");
+            file << "[[{\"name\":\"broken_" << f << "\",\"content\":\"error";
+        }
+        else if (withErrors && f % 3 == 0) {
+            json data = json::array();
+            for (int i = 0; i < 10; i++) {
+                data.push_back({ {"name", "file" + to_string(f) + "_no_content_" + to_string(i) + ".txt"} });
             }
-            record["content"] = content;
-            data.push_back(record);
+            ofstream file("data_" + to_string(f) + ".json");
+            file << data.dump(0);
         }
-        ofstream file("data_" + to_string(f) + ".json");
-        file << data.dump(0);
-    }
-    cout << "✓ Сгенерировано " << fileCount << " файлов (~0.7MB каждый)\n";
-}
-
-void runBenchmark() {
-    cout << "\n" << string(70, '=') << "\n";
-    cout << "                    БЕНЧМАРК: foo -> BAR (case-insensitive)\n";
-    cout << string(70, '=') << "\n\n";
-
-    cout << left;
-    cout << setw(8) << "РАЗМЕР"
-        << setw(10) << "ВРЕМЯ"
-        << setw(12) << "СКОРОСТЬ"
-        << setw(10) << "ОБЪЕКТОВ"
-        << setw(6) << "ФАЙЛОВ" << endl;
-    cout << string(47, '-') << endl;
-
-    vector<int> sizes = { 1, 3, 5 };
-    for (int mb : sizes) {
-        generateTestFiles(mb);
-
-        vector<TextObject> objects;
-        int total_objects = 0;
-        for (int i = 0; i < mb; i++) {
-            ifstream file("data_" + to_string(i) + ".json");
-            if (file) {
-                json j = json::parse(file);
-                auto objs = extractTextObjects(j);
-                objects.insert(objects.end(), objs.begin(), objs.end());
-                total_objects += objs.size();
+        else if (withErrors && f % 10 == 0) {
+            ofstream file("data_" + to_string(f) + ".json");
+            file << "[]";
+        }
+        else if (withErrors && f % 4 == 0) {
+            json data = json::array();
+            for (int i = 0; i < 15; i++) {
+                json record = { {"name", ""}, {"content", "empty name test"} };
+                data.push_back(record);
             }
+            ofstream file("data_" + to_string(f) + ".json");
+            file << data.dump(0);
         }
 
-        auto start_replace = chrono::high_resolution_clock::now();
-        for (auto& obj : objects) {
-            obj.content = replaceAllOccurrences(obj.content, "foo", "BAR", false);
-        }
-        auto end_replace = chrono::high_resolution_clock::now();
+        else {
+            json data = json::array();
+            for (int i = 0; i < 15; i++) {
+                json record = { {"name", "file" + to_string(f) + "_obj" + to_string(i) + ".txt"} };
+                string content;
+                int len = lenDist(gen);
 
-        int ms_replace = chrono::duration_cast<chrono::milliseconds>(end_replace - start_replace).count();
-        double time_ms = ms_replace == 0 ? 1.0 : ms_replace;
-        double mb_per_sec = mb * 1000.0 / time_ms;
+                for (int j = 0; j < len / 10; j++) {
+                    string word;
+                    int case_type = caseDist(gen);
 
-        // ДАННЫЕ - четкие колонки
-        cout << left;
-        cout << setw(8) << mb << "MB"
-            << setw(10) << ms_replace << "мс"
-            << setw(12) << fixed << setprecision(1) << mb_per_sec << "MB/с"
-            << setw(10) << total_objects
-            << setw(6) << mb << endl;
+                    if (j % 5 == 0) word = "foo";
+                    else if (j % 3 == 0) word = "bar";
+                    else word = "test";
 
-        for (int i = 0; i < mb; i++) {
-            remove(("data_" + to_string(i) + ".json").c_str());
+                    word += " ";
+
+                    if (case_type == 2) {
+                        word[0] = toupper(word[0]);
+                    }
+                    else if (case_type >= 3) {
+                        transform(word.begin(), word.end(), word.begin(), ::toupper);
+                    }
+
+                    content += word;
+                }
+                record["content"] = content;
+                data.push_back(record);
+            }
+            ofstream file("data_" + to_string(f) + ".json");
+            file << data.dump(0);
         }
     }
 
-    cout << string(47, '-') << endl;
-
-    cout << "Нажмите ENTER...";
-    cin.get();
+    auto end = chrono::high_resolution_clock::now();
+    auto ms = chrono::duration_cast<chrono::milliseconds>(end - start).count();
+    cout << "готово (" << ms << "мс)\n";
 }
+
 
 void printTableHeader() {
     cout << left << setw(35) << "Файл" << setw(12) << "Найдено" << setw(12) << "Заменено" << endl;
@@ -200,166 +189,259 @@ void printTableRow(const TextObject& obj) {
     cout << left << setw(35) << obj.name << setw(12) << obj.found << setw(12) << obj.replaced << endl;
 }
 
-void runTests() {
-    cout << "\n=== ЮНИТ-ТЕСТЫ v2.1 ===\n";
-    int passed = 0, total = 0;
+void saveObjectsToOriginalFiles(vector<TextObject>& objects) {
+    map<string, map<string, string>> files_map;
 
-    total++; {
-        vector<size_t> pos = findAllPositions("foo bar foo test foo", "foo", true);
-        if (pos.size() == 3 && pos[0] == 0 && pos[1] == 8 && pos[2] == 16) {
-            cout << " Тест 1: Поиск case-sensitive OK\n"; passed++;
+    for (const auto& obj : objects) {
+        const string& n = obj.name;
+        const string prefix = "file";
+        size_t prefix_pos = n.find(prefix);
+        size_t underscore_pos = n.find('_', prefix.size());
+
+        int fileIndex = -1;
+        if (prefix_pos == 0 && underscore_pos != string::npos) {
+            string num_str = n.substr(prefix.size(), underscore_pos - prefix.size());
+            try {
+                fileIndex = stoi(num_str);
+            }
+            catch (...) {
+                fileIndex = -1;
+            }
         }
-        else cout << " Тест 1: FAIL\n";
+
+        if (fileIndex >= 0) {
+            string filename = "data_" + to_string(fileIndex) + ".json";
+            files_map[filename][obj.name] = obj.content;
+        }
     }
 
-    total++; {
-        vector<size_t> pos = findAllPositions("Foo Bar foo TEST Foo", "foo", false);
-        if (pos.size() == 3) {
-            cout << " Тест 2: Поиск case-insensitive OK\n"; passed++;
+    cout << "\nОбновленные файлы:\n";
+    int saved_count = 0;
+
+    for (auto& file_pair : files_map) {
+        const string& filename = file_pair.first;
+        auto& name_to_content = file_pair.second;
+
+        ifstream in(filename);
+        if (!in) {
+            cout << "  Не удалось открыть для чтения: " << filename << endl;
+            continue;
         }
-        else cout << " Тест 2: FAIL\n";
+
+        json j;
+        try {
+            in >> j;
+        }
+        catch (const exception& e) {
+            cout << "  Ошибка JSON при чтении " << filename << ": " << e.what() << endl;
+            continue;
+        }
+
+        if (!j.is_array()) {
+            cout << "  Пропуск (не массив): " << filename << endl;
+            continue;
+        }
+
+        for (auto& item : j) {
+            if (!item.is_object()) continue;
+            if (!item.contains("name") || !item["name"].is_string()) continue;
+
+            string name = item["name"].get<string>();
+            auto it = name_to_content.find(name);
+            if (it != name_to_content.end()) {
+                item["content"] = it->second;
+            }
+        }
+
+        ofstream out(filename);
+        if (!out) {
+            cout << "  Ошибка записи: " << filename << endl;
+            continue;
+        }
+
+        out << j.dump(0);
+        cout << "  " << filename << endl;
+        saved_count++;
     }
 
-    total++; {
-        string result = replaceAllOccurrences("foo bar foo test", "foo", "BAR", true);
-        if (result == "BAR bar BAR test") {
-            cout << " Тест 3: Замена OK\n"; passed++;
-        }
-        else cout << " Тест 3: FAIL\n";
-    }
-
-    total++; {
-        string json_str = R"([{"name":"test1.txt","content":"foo bar"},{"name":"test2.txt","content":"test"}])";
-        json j = json::parse(json_str);
-        auto objs = extractTextObjects(j);
-        if (objs.size() == 2 && objs[0].name == "test1.txt" && objs[1].name == "test2.txt") {
-            cout << " Тест 4: JSON парсинг OK\n"; passed++;
-        }
-        else cout << " Тест 4: FAIL\n";
-    }
-
-    total++; {
-        auto pos = findAllPositions("test", "", true);
-        if (pos.empty()) {
-            cout << " Тест 5: Пустая строка OK\n"; passed++;
-        }
-        else cout << " Тест 5: FAIL\n";
-    }
-
-    cout << "\n=== ИТОГО: " << passed << "/" << total << " ("
-        << fixed << setprecision(0) << (passed * 100.0 / total) << "%) ===\n";
-    if (passed == total) cout << " Все тесты GREEN!\n";
-    cout << "Нажмите ENTER..."; cin.get();
+    cout << "Всего сохранено: " << saved_count << " файлов\n";
 }
 
+
 void runInteractive() {
-    cout << "\n=== ИНТЕРАКТИВНАЯ ЗАМЕНА ===\n";
-    string file, find_str, replace_str, reg, dry, save_choice, output_file;
+    cout << "\n=== ПОИСК/ЗАМЕНА ===\n";
+    string file_name, find_str, replace_str, reg;
 
-    cout << "Файл (data_0.json/all): "; getline(cin >> ws, file);
-    cout << "Ищем: "; getline(cin, find_str);
-    cout << "На: "; getline(cin, replace_str);
-    cout << "Регистр (y/n): "; getline(cin, reg);
-    bool case_sensitive = (reg.empty() || reg[0] != 'n' && reg[0] != 'N');
-    cout << "Сухой прогон (y/n): "; getline(cin, dry);
-    bool dry_run = (dry.empty() || dry[0] == 'y' || dry[0] == 'Y');
-    cout << "Сохранить результат (y/n): "; getline(cin, save_choice);
-    bool do_save = (save_choice.empty() || save_choice[0] == 'y' || save_choice[0] == 'Y');
+    string mode;
+    cout << "Режим (1=поиск, 2=замена): ";
+    getline(cin >> ws, mode);
+    bool do_replace = (mode == "2");
 
-    if (do_save) { cout << "Имя файла для сохранения: "; getline(cin, output_file); }
-
-    cout << "\n'" << find_str << "' → '" << replace_str << "' (регистр: "
-        << (case_sensitive ? "Да" : "Нет") << ")\nПродолжить? (y/n): ";
-    string confirm; getline(cin, confirm);
-    if (confirm.empty() || confirm[0] != 'y' && confirm[0] != 'Y') return;
+    cout << "Файл (data_{number}/all): ";
+    getline(cin >> ws, file_name);
 
     vector<TextObject> objects;
-    if (file == "all" || file.empty()) {
-        for (int i = 0; i < 10; i++) {
+    vector<string> processed_files;
+    int total_objects = 0;
+
+    cout << "Загрузка файлов... ";
+    auto load_start = chrono::high_resolution_clock::now();
+
+    if (file_name == "all" || file_name.empty()) {
+        for (int i = 0; i <= 100000; i++) {
             string fn = "data_" + to_string(i) + ".json";
             ifstream f(fn);
             if (f) {
                 try {
                     json j = json::parse(f);
                     auto objs = extractTextObjects(j);
-                    objects.insert(objects.end(), objs.begin(), objs.end());
+                    if (!objs.empty()) {
+                        objects.insert(objects.end(), objs.begin(), objs.end());
+                        processed_files.push_back(fn);
+                        total_objects += (int)objs.size();
+                    }
                 }
                 catch (...) {}
+            }
+            else {
+                if (i > 10) break;
             }
         }
     }
     else {
-        ifstream f(file);
+        ifstream f(file_name);
         if (f) {
             try {
                 objects = extractTextObjects(json::parse(f));
+                processed_files.push_back(file_name);
+                total_objects = (int)objects.size();
             }
             catch (const exception& e) {
                 cout << "Ошибка JSON: " << e.what() << endl; return;
             }
         }
         else {
-            cout << "Файл не найден: " << file << endl; return;
+            cout << "Файл не найден: " << file_name << endl; return;
         }
     }
 
-    if (objects.empty()) { cout << "Объекты не найдены!\n"; return; }
+    auto load_end = chrono::high_resolution_clock::now();
+    auto load_ms = chrono::duration_cast<chrono::milliseconds>(load_end - load_start).count();
+    cout << "готово (" << processed_files.size() << " файлов, " << total_objects << " объектов, " << load_ms << "мс)\n";
 
+    if (objects.empty()) {
+        cout << "Объекты не найдены!\n";
+        return;
+    }
+
+    cout << "Ищем: "; getline(cin, find_str);
+
+    if (do_replace) {
+        cout << "На: "; getline(cin, replace_str);
+        cout << "Регистр (y/n): "; getline(cin, reg);
+    }
+    else {
+        replace_str = "";
+        reg = "n";
+    }
+
+    bool case_sensitive = (reg.empty() || (reg[0] != 'n' && reg[0] != 'N'));
+
+    cout << "\n'" << find_str << "' ";
+    if (do_replace) {
+        cout << "-> '" << replace_str << "' (регистр: " << (case_sensitive ? "Да" : "Нет") << ") [ЗАМЕНА]\n";
+    }
+    else {
+        cout << "[ТОЛЬКО ПОИСК]\n";
+    }
+    cout << "Обработано файлов: " << processed_files.size() << "\n";
+
+    cout << "Обработка... ";
     auto start = chrono::high_resolution_clock::now();
-    printTableHeader();
 
     int total_found = 0, total_replaced = 0;
-    for (auto& obj : objects) {
-        obj.found = findAllPositions(obj.content, find_str, case_sensitive).size();
-        if (!dry_run) {
-            obj.content = replaceAllOccurrences(obj.content, find_str, replace_str, case_sensitive);
-            obj.replaced = obj.found;
+    bool show_table = objects.size() < 50;
+
+    if (show_table) {
+        printTableHeader();
+        for (auto& obj : objects) {
+            obj.found = (int)findAllPositions(obj.content, find_str, case_sensitive).size();
+            if (do_replace) {
+                obj.content = replaceAllOccurrences(obj.content, find_str, replace_str, case_sensitive);
+                obj.replaced = obj.found;
+            }
+            else obj.replaced = 0;
+            printTableRow(obj);
+            total_found += obj.found;
+            total_replaced += obj.replaced;
         }
-        else obj.replaced = 0;
-        printTableRow(obj);
-        total_found += obj.found;
-        total_replaced += obj.replaced;
+    }
+    else {
+        for (auto& obj : objects) {
+            obj.found = (int)findAllPositions(obj.content, find_str, case_sensitive).size();
+            if (do_replace) {
+                obj.content = replaceAllOccurrences(obj.content, find_str, replace_str, case_sensitive);
+                obj.replaced = obj.found;
+            }
+            else obj.replaced = 0;
+            total_found += obj.found;
+            total_replaced += obj.replaced;
+        }
     }
 
-    cout << string(59, '-') << endl;
-    cout << left << setw(35) << "ИТОГО" << setw(12) << total_found << setw(12) << total_replaced << endl;
     auto end = chrono::high_resolution_clock::now();
     auto ms = chrono::duration_cast<chrono::microseconds>(end - start).count() / 1000.0;
+    cout << "готово!\n";
+
+    if (show_table) {
+        cout << string(59, '-') << endl;
+        cout << left << setw(35) << "ИТОГО" << setw(12) << total_found << setw(12) << total_replaced << endl;
+    }
+    else {
+        cout << "Найдено: " << total_found << ", Заменено: " << total_replaced << endl;
+    }
     cout << "Время обработки: " << fixed << setprecision(1) << ms << "ms\n";
 
-    if (!dry_run && do_save && !output_file.empty()) {
-        json result = json::array();
-        for (const auto& obj : objects) {
-            result.push_back({ {"name", obj.name}, {"content", obj.content} });
-        }
-        ofstream(output_file) << result.dump(0);
-        cout << " Сохранено: " << output_file << endl;
+    if (do_replace) {
+        saveObjectsToOriginalFiles(objects);
     }
 }
 
 int main() {
     setlocale(LC_ALL, "Russian");
+    ios::sync_with_stdio(false);
+    cin.tie(NULL);
+
     cout << "========================================================\n";
-    cout << "     TEXT SEARCH & REPLACE \n";
+    cout << "               TEXT SEARCH & REPLACE \n";
     cout << "========================================================\n";
 
     while (true) {
-        cout << "\n1) Генерация  2) Замена  3) Бенчмарк  4) Тесты  5) Выход  [help/h]\n> ";
+        cout << "\n1) Генерация  2) Поиск/замена  3) Выход  [help/h]\n> ";
         string choice;
         getline(cin >> ws, choice);
 
         if (choice == "1" || choice.find("ген") != string::npos) {
-            int count, errors;
-            cout << "Файлов: "; cin >> count; cin.ignore();
-            cout << "С ошибками (0/1): "; cin >> errors; cin.ignore();
+            int count;
+            bool errors;
+
+            cout << "Файлов: ";
+            cin >> count;
+            cin.ignore();
+
+            string error_choice;
+            cout << "С ошибками (y/n): ";
+            getline(cin >> ws, error_choice);
+            errors = (error_choice.empty() || error_choice[0] == 'y' || error_choice[0] == 'Y');
+
             generateTestFiles(count, errors);
         }
-        else if (choice == "2" || choice.find("зам") != string::npos) runInteractive();
-        else if (choice == "3" || choice.find("бенч") != string::npos) runBenchmark();
-        else if (choice == "4" || choice == "тест" || choice == "test") runTests();
-        else if (choice == "5" || choice == "выход" || choice == "exit") break;
+        else if (choice == "2" || choice.find("поиск") != string::npos || choice.find("зам") != string::npos) {
+            runInteractive();
+        }
+        else if (choice == "3" || choice == "выход" || choice == "exit") break;
         else if (choice == "help" || choice == "h") showHelp();
-        else cout << "Выберите 1-5 или 'help'\n";
+        else cout << "Выберите 1-3 или 'help'\n";
     }
     cout << "До свидания!\n";
     return 0;
